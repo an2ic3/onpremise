@@ -1,0 +1,150 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+
+env:
+  DOCKER_COMPOSE_VERSION: 1.29.2
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  load-config:
+    runs-on: ubuntu-latest
+
+    outputs:
+      snuba_image: ${{ steps.dotenv.outputs.snuba_image }}
+      sentry_image: ${{ steps.dotenv.outputs.sentry_image }}
+      symbolicator_image: ${{ steps.dotenv.outputs.symbolicator_image }}
+      an2ic3_version: ${{ steps.dotenv.outputs.an2ic3_version }}
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - uses: falti/dotenv-action@v0.2.5
+        id: dotenv
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [ load-config ]
+
+    strategy:
+      matrix:
+        service: [ snuba-cleanup, symbolicator-cleanup, sentry-cleanup ]
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Docker meta
+        id: docker_meta
+        uses: marcelcoding/ghaction-docker-meta@v1
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}
+
+      - uses: docker/setup-buildx-action@v1
+
+      - name: Cache Docker layers
+        uses: actions/cache@v2
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v1
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ github.token }}
+
+      - name: Get base image
+        id: image
+        run: |
+          if [[ "${{ matrix.service == 'snuba-cleanup' }}" == "true" ]]; then
+            echo "::set-output name=image::${{ needs.load-config.outputs.snuba_image }}"
+          fi
+
+          if [[ "${{ matrix.service == 'sentry-cleanup' }}" == "true" ]]; then
+            echo "::set-output name=image::${{ needs.load-config.outputs.sentry_image }}"
+          fi
+
+          if [[ "${{ matrix.service == 'symbolicator-cleanup' }}" == "true" ]]; then
+            echo "::set-output name=image::${{ needs.load-config.outputs.symbolicator_image }}"
+          fi
+
+      - name: Build
+        uses: docker/build-push-action@v2
+        with:
+          context: ./cron
+          file: ./cron/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}:${{ needs.load-config.outputs.an2ic3_version }}
+          labels: ${{ steps.docker_meta.outputs.labels }}
+          build-args: BASE_IMAGE=${{ steps.image.outputs.image }}
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new
+
+      - name: Move cache
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+      - name: Check manifest
+        if: ${{ github.event_name != 'pull_request' }}
+        run: |
+          docker buildx imagetools inspect ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}:${{ needs.load-config.outputs.an2ic3_version }}
+
+  unit-test:
+    runs-on: ubuntu-20.04
+    needs: [ build ]
+
+    name: "unit tests"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Unit Tests
+        working-directory: install
+        run: find ./ -type f -name "*-test.sh" -exec "./{}" \;
+
+  integration-test:
+    runs-on: ubuntu-20.04
+    needs: [ build ]
+
+    steps:
+      - name: Pin docker-compose
+        run: |
+          sudo rm /usr/local/bin/docker-compose
+          curl -L https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-`uname -s`-`uname -m` > docker-compose
+          chmod +x docker-compose
+          sudo mv docker-compose /usr/local/bin
+
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Integration Test
+        run: |
+          echo "Testing initial install"
+          # Create ./certificates here because install.sh will create it with root:root
+          # and then run.sh (-> setup.sh) won't be able to write to it.
+          mkdir certificates
+          ./install.sh
+          ./_integration-test/run.sh
+          echo "Testing in-place upgrade"
+          # Also test plugin installation here
+          echo "sentry-auth-oidc" >> sentry/requirements.txt
+          ./install.sh --minimize-downtime
+          ./_integration-test/run.sh
+
+      - name: Inspect failure
+        if: failure()
+        run: |
+          docker-compose ps
+          docker-compose logs

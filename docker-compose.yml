@@ -251,19 +251,11 @@ services:
     command: subscriptions --auto-offset-reset=latest --consumer-group=snuba-transactions-subscriptions-consumers --topic=events --result-topic=transactions-subscription-results --dataset=transactions --commit-log-topic=snuba-commit-log --commit-log-group=transactions_group --delay-seconds=60 --schedule-ttl=60
   snuba-cleanup:
     <<: *snuba_defaults
-    image: snuba-cleanup-onpremise-local
-    build:
-      context: ./cron
-      args:
-        BASE_IMAGE: "$SNUBA_IMAGE"
+    image: ghcr.io/an2ic3/snuba-cleanup:$AN2IC3_VERSION
     command: '"*/5 * * * * gosu snuba snuba cleanup --storage errors --dry-run False"'
   snuba-transactions-cleanup:
     <<: *snuba_defaults
-    image: snuba-cleanup-onpremise-local
-    build:
-      context: ./cron
-      args:
-        BASE_IMAGE: "$SNUBA_IMAGE"
+    image: ghcr.io/an2ic3/snuba-cleanup:$AN2IC3_VERSION
     command: '"*/5 * * * * gosu snuba snuba cleanup --storage transactions --dry-run False"'
   symbolicator:
     <<: *restart_policy
@@ -277,11 +269,7 @@ services:
     command: run -c /etc/symbolicator/config.yml
   symbolicator-cleanup:
     <<: *restart_policy
-    image: symbolicator-cleanup-onpremise-local
-    build:
-      context: ./cron
-      args:
-        BASE_IMAGE: "$SYMBOLICATOR_IMAGE"
+    image: ghcr.io/an2ic3/symbolicator-cleanup:$AN2IC3_VERSION
     command: '"55 23 * * * gosu symbolicator symbolicator cleanup"'
     volumes:
       - "sentry-symbolicator:/data"
@@ -316,11 +304,7 @@ services:
     command: run query-subscription-consumer --commit-batch-size 1 --topic transactions-subscription-results
   sentry-cleanup:
     <<: *sentry_defaults
-    image: sentry-cleanup-onpremise-local
-    build:
-      context: ./cron
-      args:
-        BASE_IMAGE: "$SENTRY_IMAGE"
+    image: ghcr.io/an2ic3/sentry-cleanup:$AN2IC3_VERSION
     entrypoint: "/entrypoint.sh"
     command: '"0 0 * * * gosu sentry sentry cleanup --days $SENTRY_EVENT_RETENTION_DAYS"'
   nginx:

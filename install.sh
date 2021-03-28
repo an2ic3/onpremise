@@ -15,7 +15,7 @@ source ensure-files-from-examples.sh
 source generate-secret-key.sh
 source replace-tsdb.sh
 source update-docker-images.sh
-source build-docker-images.sh
+#an2ic3: source build-docker-images.sh
 source turn-things-off.sh
 source set-up-zookeeper.sh
 source install-wal2json.sh
